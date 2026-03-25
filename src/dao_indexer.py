@@ -1,52 +1,61 @@
+import requests
 import numpy as np
-import pandas as pd
-from scipy.optimize import minimize
+from typing import List, Dict
 
 class DAOIndexer:
-    def __init__(self, dao_data):
-        self.dao_data = dao_data
+    def __init__(self, dao_api_urls: List[str]):
+        self.dao_api_urls = dao_api_urls
 
-    def analyze_liquidity(self):
-        """
-        Analyze the liquidity of the DAO's token pool.
-        """
-        pool_reserves = self.dao_data['pool_reserves']
-        pool_volume = self.dao_data['pool_volume']
-        token_price = self.dao_data['token_price']
+    def fetch_dao_data(self) -> List[Dict[str, any]]:
+        dao_data = []
+        for url in self.dao_api_urls:
+            response = requests.get(url)
+            dao_data.extend(response.json())
+        return dao_data
 
-        # Calculate liquidity metrics
-        liquidity = pool_reserves * token_price
-        daily_volume = pool_volume / self.dao_data['num_days']
-        liquidity_ratio = daily_volume / liquidity
-
+    def aggregate_dao_data(self, dao_data: List[Dict[str, any]]) -> Dict[str, any]:
+        aum = 0
+        token_supply = 0
+        num_holders = 0
+        for dao in dao_data:
+            aum += dao['aum']
+            token_supply += dao['token_supply']
+            num_holders += dao['num_holders']
         return {
-            'liquidity': liquidity,
-            'daily_volume': daily_volume,
-            'liquidity_ratio': liquidity_ratio
+            'total_aum': aum,
+            'total_token_supply': token_supply,
+            'total_num_holders': num_holders
         }
 
-    def optimize_portfolio(self, target_return, risk_aversion):
-        """
-        Optimize the DAO's token portfolio to achieve a target return while minimizing risk.
-        """
-        # Prepare the data
-        returns = self.dao_data['token_returns']
-        cov_matrix = returns.cov()
+    def optimize_dao_portfolio(self, dao_data: List[Dict[str, any]]) -> List[Dict[str, any]]:
+        # Compute the covariance matrix of the DAO returns
+        returns = [dao['return'] for dao in dao_data]
+        covariance = np.cov(returns)
 
-        # Define the objective function
-        def objective(weights):
-            portfolio_return = np.dot(weights, returns.mean())
-            portfolio_risk = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-            return -portfolio_return + risk_aversion * portfolio_risk
-
-        # Define the constraints
-        cons = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        # Compute the efficient frontier
+        weights = np.random.random(len(dao_data))
+        weights /= np.sum(weights)
+        expected_return = np.dot(weights, returns)
+        expected_risk = np.sqrt(np.dot(weights.T, np.dot(covariance, weights)))
 
         # Optimize the portfolio
-        initial_weights = np.ones(len(returns.columns)) / len(returns.columns)
-        result = minimize(objective, initial_weights, method='SLSQP', constraints=cons)
+        optimal_weights = self.compute_optimal_weights(covariance, returns)
+        optimal_return = np.dot(optimal_weights, returns)
+        optimal_risk = np.sqrt(np.dot(optimal_weights.T, np.dot(covariance, optimal_weights)))
 
-        # Extract the optimal portfolio weights
-        optimal_weights = result.x
+        # Update the DAO data with the optimized weights
+        optimized_dao_data = []
+        for i, dao in enumerate(dao_data):
+            optimized_dao_data.append({
+                'name': dao['name'],
+                'aum': dao['aum'],
+                'token_supply': dao['token_supply'],
+                'num_holders': dao['num_holders'],
+                'return': dao['return'],
+                'weight': optimal_weights[i]
+            })
+        return optimized_dao_data
 
-        return optimal_weights
+    def compute_optimal_weights(self, covariance: np.ndarray, returns: List[float]) -> np.ndarray:
+        # Implement portfolio optimization algorithm here
+        pass
