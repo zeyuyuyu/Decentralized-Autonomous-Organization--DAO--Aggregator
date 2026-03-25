@@ -1,101 +1,52 @@
-import requests
-from typing import Dict, List, Optional
-from abc import ABC, abstractmethod
-
-class ChainIndexer(ABC):
-    @abstractmethod
-    def get_daos(self) -> List[Dict]:
-        pass
-
-class AragonIndexer(ChainIndexer):
-    def __init__(self, rpc_url: str):
-        self.rpc_url = rpc_url
-        
-    def get_daos(self) -> List[Dict]:
-        # Query Aragon subgraph
-        query = '''
-        {
-          daos(first: 1000) {
-            id
-            name
-            token {
-              name
-              symbol
-              totalSupply
-            }
-            members {
-              id
-            }
-          }
-        }'''
-        
-        response = requests.post(
-            'https://api.thegraph.com/subgraphs/name/aragon/aragon-mainnet',
-            json={'query': query}
-        )
-        return response.json()['data']['daos']
-
-class CompoundIndexer(ChainIndexer):
-    def __init__(self, rpc_url: str):
-        self.rpc_url = rpc_url
-
-    def get_daos(self) -> List[Dict]:
-        # Query Compound governance
-        query = '''
-        {
-          governances(first: 1000) {
-            id
-            proposals {
-              id
-              description
-              state
-            }
-            delegates {
-              id
-              votes
-            }
-          }
-        }'''
-
-        response = requests.post(
-            'https://api.thegraph.com/subgraphs/name/compound-finance/governance', 
-            json={'query': query}
-        )
-        return response.json()['data']['governances']
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
 
 class DAOIndexer:
-    def __init__(self):
-        self.indexers: List[ChainIndexer] = []
+    def __init__(self, dao_data):
+        self.dao_data = dao_data
 
-    def add_indexer(self, indexer: ChainIndexer) -> None:
-        self.indexers.append(indexer)
+    def analyze_liquidity(self):
+        """
+        Analyze the liquidity of the DAO's token pool.
+        """
+        pool_reserves = self.dao_data['pool_reserves']
+        pool_volume = self.dao_data['pool_volume']
+        token_price = self.dao_data['token_price']
 
-    def index_all(self) -> Dict[str, List[Dict]]:
-        results = {}
-        for indexer in self.indexers:
-            try:
-                daos = indexer.get_daos()
-                results[indexer.__class__.__name__] = daos
-            except Exception as e:
-                print(f'Error indexing {indexer.__class__.__name__}: {str(e)}')
-                results[indexer.__class__.__name__] = []
-        return results
+        # Calculate liquidity metrics
+        liquidity = pool_reserves * token_price
+        daily_volume = pool_volume / self.dao_data['num_days']
+        liquidity_ratio = daily_volume / liquidity
 
-    def get_dao_count(self) -> int:
-        total = 0
-        for indexer in self.indexers:
-            try:
-                total += len(indexer.get_daos())
-            except:
-                continue
-        return total
+        return {
+            'liquidity': liquidity,
+            'daily_volume': daily_volume,
+            'liquidity_ratio': liquidity_ratio
+        }
 
-# Usage example:
-'''
-indexer = DAOIndexer()
-indexer.add_indexer(AragonIndexer('ETH_RPC_URL'))
-indexer.add_indexer(CompoundIndexer('ETH_RPC_URL'))
+    def optimize_portfolio(self, target_return, risk_aversion):
+        """
+        Optimize the DAO's token portfolio to achieve a target return while minimizing risk.
+        """
+        # Prepare the data
+        returns = self.dao_data['token_returns']
+        cov_matrix = returns.cov()
 
-results = indexer.index_all()
-print(f'Total DAOs indexed: {indexer.get_dao_count()}')
-'''
+        # Define the objective function
+        def objective(weights):
+            portfolio_return = np.dot(weights, returns.mean())
+            portfolio_risk = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+            return -portfolio_return + risk_aversion * portfolio_risk
+
+        # Define the constraints
+        cons = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+
+        # Optimize the portfolio
+        initial_weights = np.ones(len(returns.columns)) / len(returns.columns)
+        result = minimize(objective, initial_weights, method='SLSQP', constraints=cons)
+
+        # Extract the optimal portfolio weights
+        optimal_weights = result.x
+
+        return optimal_weights
